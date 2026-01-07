@@ -272,6 +272,12 @@ std::string CoinbaseWebSocketClient::binance_to_coinbase_symbol(const std::strin
     if (symbol == "AVAXUSDT") return "AVAX-USD";
     if (symbol == "LTCUSDT") return "LTC-USD";
     if (symbol == "LINKUSDT") return "LINK-USD";
+    if (symbol == "XLMUSDT") return "XLM-USD";
+    if (symbol == "XRPUSDT") return "XRP-USD";
+    if (symbol == "UNIUSDT") return "UNI-USD";
+    if (symbol == "AAVEUSDT") return "AAVE-USD";
+    if (symbol == "ATOMUSDT") return "ATOM-USD";
+    if (symbol == "ALGOUSDT") return "ALGO-USD";
 
     // Generic conversion: remove USDT and add -USD
     if (symbol.length() > 4 && symbol.substr(symbol.length() - 4) == "USDT") {

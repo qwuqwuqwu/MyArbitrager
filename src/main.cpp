@@ -73,7 +73,13 @@ int main() {
         "MATICUSDT", // Polygon
         "AVAXUSDT",  // Avalanche
         "LTCUSDT",   // Litecoin
-        "LINKUSDT"   // Chainlink
+        "LINKUSDT",  // Chainlink
+        "XLMUSDT",   // Stellar
+        "XRPUSDT",   // Ripple
+        "UNIUSDT",   // Uniswap
+        "AAVEUSDT",  // Aave
+        "ATOMUSDT",  // Cosmos
+        "ALGOUSDT"   // Algorand
     };
 
     std::cout << "Monitoring " << symbols.size() << " cryptocurrency pairs across 3 exchanges:\n";
