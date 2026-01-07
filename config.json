@@ -1,0 +1,29 @@
+{
+  "binance": {
+    "websocket_url": "wss://stream.binance.com:9443/ws/",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT", 
+      "BNBUSDT",
+      "ADAUSDT",
+      "DOTUSDT",
+      "SOLUSDT",
+      "MATICUSDT",
+      "AVAXUSDT",
+      "LTCUSDT",
+      "LINKUSDT"
+    ]
+  },
+  "dashboard": {
+    "update_interval_ms": 500,
+    "max_symbols_display": 15,
+    "enable_colors": true,
+    "show_statistics": true
+  },
+  "performance": {
+    "enable_latency_tracking": true,
+    "log_message_counts": false,
+    "connection_timeout_ms": 5000,
+    "reconnect_delay_ms": 5000
+  }
+}

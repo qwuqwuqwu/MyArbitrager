@@ -1,0 +1,13 @@
+{
+  "name": "binance-dashboard",
+  "version": "1.0.0",
+  "dependencies": [
+    "websocketpp",
+    "nlohmann-json", 
+    "openssl",
+    "boost-system",
+    "boost-thread",
+    "boost-chrono",
+    "boost-random"
+  ]
+}
