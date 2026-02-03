@@ -124,7 +124,7 @@ void TerminalDashboard::draw_market_data() {
 
     for (const auto& key : keys) {
         const auto& ticker = market_data_[key];
-        auto status = get_data_status(ticker);
+        auto status = get_data_status(ticker); // compare current timestamp and the timestamp this ticker arrived
 
         // Determine price color based on change
         const char* price_color = RESET;
@@ -251,6 +251,7 @@ void TerminalDashboard::draw_statistics() {
 }
 
 void TerminalDashboard::draw_arbitrage_opportunities() {
+    // header
     std::cout << CYAN;
     std::cout << "╠════════════════════════════════════════════════════════════════════════════════════════════════╣\n";
     std::cout << "║ " << BOLD << "ARBITRAGE OPPORTUNITIES (Live Signals)" << RESET << std::string(57, ' ') << CYAN << "║\n";

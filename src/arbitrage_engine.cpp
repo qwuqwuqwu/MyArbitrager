@@ -78,9 +78,9 @@ void ArbitrageEngine::calculate_arbitrage() {
 
     for (const auto& [key, ticker] : market_data_) {
         // Consider LIVE and SLOW data (but not STALE)
-        auto status = get_data_status(ticker);
+        auto status = get_data_status(ticker); // compare current time and the time ticker arrived
         if (status == DataStatus::LIVE || status == DataStatus::SLOW) {
-            std::string normalized = normalize_symbol(ticker.symbol);
+            std::string normalized = normalize_symbol(ticker.symbol); // Does this step take time?
             symbol_map[normalized].push_back(ticker);
         }
     }
@@ -118,6 +118,7 @@ void ArbitrageEngine::calculate_arbitrage() {
                 // Skip if data age difference is too large (>500ms) to avoid false arbitrage
                 // This prevents comparing stale prices with fresh prices
                 // Increased from 200ms to 500ms to allow Kraken/Binance.US comparisons
+                // TODO: should use #define instead of hardcoded number
                 if (age_diff_ms > 500) {
                     continue;
                 }
@@ -203,7 +204,7 @@ void ArbitrageEngine::calculate_arbitrage() {
     // Update stored opportunities
     {
         std::lock_guard<std::mutex> opp_lock(opportunities_mutex_);
-        opportunities_ = std::move(new_opportunities);
+        opportunities_ = std::move(new_opportunities); // move semantics here
     }
 }
 
