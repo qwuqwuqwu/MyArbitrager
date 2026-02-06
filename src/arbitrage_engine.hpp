@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include "exchange_queue.hpp"
 #include <thread>
 #include <atomic>
 #include <mutex>
@@ -22,7 +23,7 @@ public:
     // Stop the engine
     void stop();
 
-    // Update market data (thread-safe)
+    // Update market data via per-exchange queues (thread-safe, lock-free push)
     void update_market_data(const TickerData& ticker);
 
     // Set callback for when arbitrage opportunities are found
@@ -41,10 +42,15 @@ public:
     uint64_t get_calculation_count() const { return calculation_count_; }
     uint64_t get_opportunity_count() const { return opportunity_count_; }
 
+    // Print latency report
+    void print_latency_report() const;
+
 private:
-    // Market data storage
+    // Per-exchange queues for incoming data (replaces single mutex map for writes)
+    PerExchangeQueues incoming_queues_;
+
+    // Market data storage (only accessed by calculation thread after draining queues)
     MarketDataMap market_data_;
-    mutable std::mutex data_mutex_;
 
     // Arbitrage opportunities
     std::vector<ArbitrageOpportunity> opportunities_;
@@ -68,6 +74,9 @@ private:
 
     // Main calculation loop
     void calculation_loop();
+
+    // Drain queues and update market_data_
+    void drain_incoming_queues();
 
     // Calculate arbitrage opportunities
     void calculate_arbitrage();

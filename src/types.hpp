@@ -15,6 +15,9 @@ struct TickerData {
     double ask_quantity;
     uint64_t timestamp_ms;
 
+    // For latency measurement (TSC cycles when enqueued)
+    uint64_t enqueue_tsc = 0;
+
     // Calculated fields
     double spread_bps() const {
         if (bid_price > 0) {

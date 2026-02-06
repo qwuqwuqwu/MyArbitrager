@@ -4,6 +4,9 @@ project(BinanceDashboard CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Option to use SPSC lock-free queue instead of mutex-based queue
+option(USE_SPSC_QUEUE "Use SPSC lock-free queue instead of mutex" OFF)
+
 # Find required packages
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -46,6 +49,7 @@ target_compile_options(binance_dashboard PRIVATE
 # Additional compiler definitions
 target_compile_definitions(binance_dashboard PRIVATE
     BOOST_ASIO_HAS_STD_CHRONO
+    $<$<BOOL:${USE_SPSC_QUEUE}>:USE_SPSC_QUEUE>
 )
 
 # For macOS, link system libraries

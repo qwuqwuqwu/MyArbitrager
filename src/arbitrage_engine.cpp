@@ -1,4 +1,5 @@
 #include "arbitrage_engine.hpp"
+#include "queue_latency_tracker.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -7,7 +8,7 @@ ArbitrageEngine::ArbitrageEngine()
     , calculation_interval_(100)  // 100ms default
     , calculation_count_(0)
     , opportunity_count_(0)
-    , min_profit_bps_(5.0) {  // 10 basis points minimum profit
+    , min_profit_bps_(5.0) {  // 5 basis points minimum profit
 }
 
 ArbitrageEngine::~ArbitrageEngine() {
@@ -21,7 +22,7 @@ void ArbitrageEngine::start() {
 
     running_ = true;
     calculation_thread_ = std::thread(&ArbitrageEngine::calculation_loop, this);
-    std::cout << "Arbitrage engine started." << std::endl;
+    std::cout << "Arbitrage engine started (with per-exchange mutex queues)." << std::endl;
 }
 
 void ArbitrageEngine::stop() {
@@ -35,13 +36,15 @@ void ArbitrageEngine::stop() {
         calculation_thread_.join();
     }
 
+    // Print final latency report
+    print_latency_report();
+
     std::cout << "Arbitrage engine stopped." << std::endl;
 }
 
 void ArbitrageEngine::update_market_data(const TickerData& ticker) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    std::string key = make_ticker_key(ticker.exchange, ticker.symbol);
-    market_data_[key] = ticker;
+    // Push to per-exchange queue (timestamp is recorded inside push())
+    incoming_queues_.push(ticker);
 }
 
 void ArbitrageEngine::set_opportunity_callback(ArbitrageCallback callback) {
@@ -62,15 +65,41 @@ std::vector<ArbitrageOpportunity> ArbitrageEngine::get_opportunities() const {
     return opportunities_;
 }
 
+void ArbitrageEngine::print_latency_report() const {
+    get_queue_latency_tracker().print_report();
+}
+
 void ArbitrageEngine::calculation_loop() {
+    // Print latency report periodically
+    auto last_report_time = std::chrono::steady_clock::now();
+    const auto report_interval = std::chrono::seconds(10);
+
     while (running_) {
+        // Drain all incoming queues into market_data_
+        drain_incoming_queues();
+
+        // Calculate arbitrage
         calculate_arbitrage();
+
+        // Print latency report every 10 seconds
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_report_time >= report_interval) {
+            print_latency_report();
+            last_report_time = now;
+        }
+
         std::this_thread::sleep_for(calculation_interval_);
     }
 }
 
+void ArbitrageEngine::drain_incoming_queues() {
+    // Drain all queues - this updates market_data_ with latest prices
+    // Latency measurement happens inside try_pop() automatically
+    incoming_queues_.drain_all(market_data_);
+}
+
 void ArbitrageEngine::calculate_arbitrage() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
+    // No lock needed here - market_data_ is only accessed by this thread
     calculation_count_++;
 
     // Build a map of symbols to their tickers across exchanges
@@ -78,9 +107,9 @@ void ArbitrageEngine::calculate_arbitrage() {
 
     for (const auto& [key, ticker] : market_data_) {
         // Consider LIVE and SLOW data (but not STALE)
-        auto status = get_data_status(ticker); // compare current time and the time ticker arrived
+        auto status = get_data_status(ticker);
         if (status == DataStatus::LIVE || status == DataStatus::SLOW) {
-            std::string normalized = normalize_symbol(ticker.symbol); // Does this step take time?
+            std::string normalized = normalize_symbol(ticker.symbol);
             symbol_map[normalized].push_back(ticker);
         }
     }
@@ -105,7 +134,7 @@ void ArbitrageEngine::calculate_arbitrage() {
                 auto age2_ms = ticker2.age().count();
                 auto age_diff_ms = std::abs(static_cast<long>(age1_ms - age2_ms));
 
-                // Log timestamp differences for debugging
+                // Log timestamp differences for debugging (first 5 times)
                 static int timestamp_debug_count = 0;
                 if (timestamp_debug_count < 5 && age_diff_ms > 100) {
                     std::cout << "DEBUG: Age difference for " << symbol << ": "
@@ -115,10 +144,7 @@ void ArbitrageEngine::calculate_arbitrage() {
                     timestamp_debug_count++;
                 }
 
-                // Skip if data age difference is too large (>500ms) to avoid false arbitrage
-                // This prevents comparing stale prices with fresh prices
-                // Increased from 200ms to 500ms to allow Kraken/Binance.US comparisons
-                // TODO: should use #define instead of hardcoded number
+                // Skip if data age difference is too large (>500ms)
                 if (age_diff_ms > 500) {
                     continue;
                 }
@@ -138,7 +164,6 @@ void ArbitrageEngine::calculate_arbitrage() {
                         opp.profit_bps = profit_bps;
                         opp.max_quantity = std::min(ticker1.ask_quantity, ticker2.bid_quantity);
 
-                        // Store timestamp age difference for diagnostics
                         static int direction_debug = 0;
                         if (direction_debug < 3) {
                             std::cout << "DEBUG: Opportunity " << symbol << " Buy " << ticker1.exchange
@@ -156,7 +181,6 @@ void ArbitrageEngine::calculate_arbitrage() {
                         new_opportunities.push_back(opp);
                         opportunity_count_++;
 
-                        // Call callback
                         {
                             std::lock_guard<std::mutex> cb_lock(callback_mutex_);
                             if (opportunity_callback_) {
@@ -188,7 +212,6 @@ void ArbitrageEngine::calculate_arbitrage() {
                         new_opportunities.push_back(opp);
                         opportunity_count_++;
 
-                        // Call callback
                         {
                             std::lock_guard<std::mutex> cb_lock(callback_mutex_);
                             if (opportunity_callback_) {
@@ -204,7 +227,7 @@ void ArbitrageEngine::calculate_arbitrage() {
     // Update stored opportunities
     {
         std::lock_guard<std::mutex> opp_lock(opportunities_mutex_);
-        opportunities_ = std::move(new_opportunities); // move semantics here
+        opportunities_ = std::move(new_opportunities);
     }
 }
 
@@ -216,20 +239,14 @@ std::string ArbitrageEngine::normalize_symbol(const std::string& symbol) const {
 
     // Handle Coinbase format (BTC-USD) -> normalize to base currency
     if (normalized.find('-') != std::string::npos) {
-        // Coinbase format: "BTC-USD"
-        // Extract just the base currency (BTC)
         size_t dash_pos = normalized.find('-');
         normalized = normalized.substr(0, dash_pos);
     }
     // Handle Binance format (BTCUSDT) -> normalize to base currency
     else if (normalized.length() > 4 && normalized.substr(normalized.length() - 4) == "USDT") {
-        // Binance format: "BTCUSDT"
-        // Extract just the base currency (BTC)
         normalized = normalized.substr(0, normalized.length() - 4);
     }
     else if (normalized.length() > 3 && normalized.substr(normalized.length() - 3) == "USD") {
-        // Alternative format: "BTCUSD"
-        // Extract just the base currency (BTC)
         normalized = normalized.substr(0, normalized.length() - 3);
     }
 

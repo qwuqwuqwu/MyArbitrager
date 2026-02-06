@@ -52,7 +52,13 @@ void setup_signal_handlers() {
 
 int main() {
     std::cout << "Multi-Exchange Crypto Arbitrage Dashboard\n";
-    std::cout << "==========================================\n\n";
+    std::cout << "==========================================\n";
+#ifdef USE_SPSC_QUEUE
+    std::cout << "Queue Type: SPSC Lock-Free (optimized)\n";
+#else
+    std::cout << "Queue Type: Mutex-based (baseline)\n";
+#endif
+    std::cout << "Latency report prints every 10 seconds\n\n";
 
     setup_signal_handlers();
 
