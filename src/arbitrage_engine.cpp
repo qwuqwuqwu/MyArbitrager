@@ -1,5 +1,6 @@
 #include "arbitrage_engine.hpp"
 #include "queue_latency_tracker.hpp"
+#include "thread_affinity.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -8,7 +9,9 @@ ArbitrageEngine::ArbitrageEngine()
     , calculation_interval_(100)  // 100ms default
     , calculation_count_(0)
     , opportunity_count_(0)
-    , min_profit_bps_(5.0) {  // 5 basis points minimum profit
+    , min_profit_bps_(5.0)  // 5 basis points minimum profit
+    , max_reports_(0)       // 0 = unlimited
+    , report_count_(0) {
 }
 
 ArbitrageEngine::~ArbitrageEngine() {
@@ -22,14 +25,14 @@ void ArbitrageEngine::start() {
 
     running_ = true;
     calculation_thread_ = std::thread(&ArbitrageEngine::calculation_loop, this);
-    std::cout << "Arbitrage engine started (with per-exchange mutex queues)." << std::endl;
+#ifdef USE_MPSC_QUEUE
+    std::cout << "Arbitrage engine started (shared MPSC lock-free queue)." << std::endl;
+#else
+    std::cout << "Arbitrage engine started (shared mutex queue)." << std::endl;
+#endif
 }
 
 void ArbitrageEngine::stop() {
-    if (!running_) {
-        return;
-    }
-
     running_ = false;
 
     if (calculation_thread_.joinable()) {
@@ -60,6 +63,14 @@ void ArbitrageEngine::set_calculation_interval(std::chrono::milliseconds interva
     calculation_interval_ = interval;
 }
 
+void ArbitrageEngine::set_max_reports(int max_reports) {
+    max_reports_ = max_reports;
+}
+
+void ArbitrageEngine::set_shutdown_callback(std::function<void()> callback) {
+    shutdown_callback_ = std::move(callback);
+}
+
 std::vector<ArbitrageOpportunity> ArbitrageEngine::get_opportunities() const {
     std::lock_guard<std::mutex> lock(opportunities_mutex_);
     return opportunities_;
@@ -70,6 +81,9 @@ void ArbitrageEngine::print_latency_report() const {
 }
 
 void ArbitrageEngine::calculation_loop() {
+    // Pin arbitrage engine thread (hot path - most latency-sensitive)
+    thread_affinity::set_thread_affinity(thread_affinity::TAG_ARBITRAGE_ENGINE);
+
     // Print latency report periodically
     auto last_report_time = std::chrono::steady_clock::now();
     const auto report_interval = std::chrono::seconds(10);
@@ -84,8 +98,25 @@ void ArbitrageEngine::calculation_loop() {
         // Print latency report every 10 seconds
         auto now = std::chrono::steady_clock::now();
         if (now - last_report_time >= report_interval) {
+            report_count_++;
+            std::cout << "\n[Report " << report_count_;
+            if (max_reports_ > 0) {
+                std::cout << "/" << max_reports_;
+            }
+            std::cout << "]\n";
             print_latency_report();
             last_report_time = now;
+
+            // Auto-shutdown after max reports reached
+            if (max_reports_ > 0 && report_count_ >= max_reports_) {
+                std::cout << "\nBenchmark complete: " << report_count_
+                          << " reports collected. Shutting down gracefully.\n";
+                running_ = false;
+                if (shutdown_callback_) {
+                    shutdown_callback_();
+                }
+                break;
+            }
         }
 
         std::this_thread::sleep_for(calculation_interval_);

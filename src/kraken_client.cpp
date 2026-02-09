@@ -1,4 +1,5 @@
 #include "kraken_client.hpp"
+#include "thread_affinity.hpp"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -162,6 +163,8 @@ void KrakenWebSocketClient::send_subscribe_message(const std::vector<std::string
 }
 
 void KrakenWebSocketClient::run_client() {
+    thread_affinity::set_thread_affinity(thread_affinity::TAG_KRAKEN_WS);
+
     try {
         while (!should_stop_ && connected_) {
             do_read();

@@ -35,6 +35,12 @@ public:
     // Set calculation interval (default: 100ms)
     void set_calculation_interval(std::chrono::milliseconds interval);
 
+    // Set max number of latency reports before auto-shutdown (0 = unlimited)
+    void set_max_reports(int max_reports);
+
+    // Set callback invoked when benchmark is complete (max reports reached)
+    void set_shutdown_callback(std::function<void()> callback);
+
     // Get current arbitrage opportunities
     std::vector<ArbitrageOpportunity> get_opportunities() const;
 
@@ -46,8 +52,8 @@ public:
     void print_latency_report() const;
 
 private:
-    // Per-exchange queues for incoming data (replaces single mutex map for writes)
-    PerExchangeQueues incoming_queues_;
+    // Shared queue for incoming data (all exchanges push to the same queue)
+    SharedQueue incoming_queues_;
 
     // Market data storage (only accessed by calculation thread after draining queues)
     MarketDataMap market_data_;
@@ -71,6 +77,11 @@ private:
 
     // Configuration
     double min_profit_bps_;
+    int max_reports_;
+    int report_count_;
+
+    // Shutdown callback (invoked when max_reports reached)
+    std::function<void()> shutdown_callback_;
 
     // Main calculation loop
     void calculation_loop();

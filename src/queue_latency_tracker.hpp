@@ -13,14 +13,14 @@
 // Tracks per-exchange latency statistics
 class QueueLatencyTracker {
 public:
-    static constexpr size_t MAX_EXCHANGES = 4;  // Binance, Coinbase, Kraken, + spare
+    static constexpr size_t MAX_EXCHANGES = 5;  // Binance, Coinbase, Kraken, Bybit, + spare
     static constexpr size_t SAMPLE_BUFFER_SIZE = 10000;  // Store last 10K samples for percentiles
 
     // Queue type identifier for reports
-#ifdef USE_SPSC_QUEUE
-    static constexpr const char* QUEUE_TYPE = "SPSC Lock-Free";
+#ifdef USE_MPSC_QUEUE
+    static constexpr const char* QUEUE_TYPE = "MPSC Lock-Free";
 #else
-    static constexpr const char* QUEUE_TYPE = "Mutex-based";
+    static constexpr const char* QUEUE_TYPE = "Shared Mutex";
 #endif
 
     struct ExchangeStats {
@@ -32,9 +32,10 @@ public:
 
         // Ring buffer for percentile calculation
         std::array<uint64_t, SAMPLE_BUFFER_SIZE> samples{};
+        std::array<size_t, SAMPLE_BUFFER_SIZE> occupancy_samples{};
         std::atomic<size_t> sample_index{0};
 
-        void record(uint64_t latency_ns) {
+        void record(uint64_t latency_ns, size_t queue_occupancy = 0) {
             count.fetch_add(1, std::memory_order_relaxed);
             total_ns.fetch_add(latency_ns, std::memory_order_relaxed);
 
@@ -53,6 +54,7 @@ public:
             // Store sample for percentiles (overwrite old samples)
             size_t idx = sample_index.fetch_add(1, std::memory_order_relaxed) % SAMPLE_BUFFER_SIZE;
             samples[idx] = latency_ns;
+            occupancy_samples[idx] = queue_occupancy;
         }
 
         double mean_ns() const {
@@ -67,6 +69,7 @@ public:
             min_ns.store(UINT64_MAX, std::memory_order_relaxed);
             max_ns.store(0, std::memory_order_relaxed);
             sample_index.store(0, std::memory_order_relaxed);
+            occupancy_samples.fill(0);
         }
     };
 
@@ -75,6 +78,7 @@ public:
         register_exchange("Binance");
         register_exchange("Coinbase");
         register_exchange("Kraken");
+        register_exchange("Bybit");
     }
 
     // Get exchange index (registers if new)
@@ -93,7 +97,7 @@ public:
 
     // Record a queue operation with start and end timestamps
     // This measures the actual push/pop time, not the wait time in queue
-    void record_operation(const std::string& exchange, uint64_t start_tsc, uint64_t end_tsc) {
+    void record_operation(const std::string& exchange, uint64_t start_tsc, uint64_t end_tsc, size_t queue_occupancy = 0) {
         if (start_tsc == 0 || end_tsc == 0) return;
         if (end_tsc <= start_tsc) return;  // Invalid measurement
 
@@ -101,7 +105,7 @@ public:
         uint64_t latency_ns = timing::get_calibrator().cycles_to_ns(latency_cycles);
 
         size_t idx = get_exchange_index(exchange);
-        exchanges_[idx].record(latency_ns);
+        exchanges_[idx].record(latency_ns, queue_occupancy);
     }
 
     // Get current timestamp for timing
@@ -115,7 +119,7 @@ public:
         std::cout << "╔═══════════════════════════════════════════════════════════════════════════╗\n";
         std::cout << "║           QUEUE PUSH LATENCY (" << std::left << std::setw(20) << QUEUE_TYPE << ")                      ║\n";
         std::cout << "╠═══════════════════════════════════════════════════════════════════════════╣\n";
-        std::cout << "║ Exchange   │   Count   │    Mean    │     Min    │     Max    │    P99    ║\n";
+        std::cout << "║ Exchange   │   Count   │   Median   │     Min    │     Max    │    P99    ║\n";
         std::cout << "╠═══════════════════════════════════════════════════════════════════════════╣\n";
 
         for (size_t i = 0; i < exchange_count_; ++i) {
@@ -142,13 +146,137 @@ public:
 
             std::cout << "║ " << std::left << std::setw(10) << ex.name << " │ "
                       << std::right << std::setw(9) << cnt << " │ "
-                      << std::setw(10) << format_time(static_cast<uint64_t>(ex.mean_ns())) << " │ "
+                      << std::setw(10) << format_time(calculate_percentile(ex, 50)) << " │ "
                       << std::setw(10) << format_time(min_val) << " │ "
                       << std::setw(10) << format_time(max_val) << " │ "
                       << std::setw(9) << format_time(p99) << " ║\n";
         }
 
         std::cout << "╚═══════════════════════════════════════════════════════════════════════════╝\n";
+
+        // Print histogram for each exchange
+        print_histogram();
+
+        // Print queue occupancy stats
+        print_occupancy();
+    }
+
+    // Print ASCII histogram of latency distribution
+    void print_histogram() const {
+        // Bucket boundaries in nanoseconds
+        static constexpr size_t NUM_BUCKETS = 8;
+        static constexpr uint64_t bucket_bounds[NUM_BUCKETS] = {
+            50, 100, 250, 500, 1000, 5000, 10000, UINT64_MAX
+        };
+        static constexpr const char* bucket_labels[NUM_BUCKETS] = {
+            "   <50ns",
+            " 50-100ns",
+            "100-250ns",
+            "250-500ns",
+            "  0.5-1us",
+            "    1-5us",
+            "   5-10us",
+            "    >10us"
+        };
+        static constexpr int BAR_WIDTH = 40;
+
+        for (size_t i = 0; i < exchange_count_; ++i) {
+            const auto& ex = exchanges_[i];
+            size_t sample_count = std::min(
+                ex.sample_index.load(std::memory_order_relaxed),
+                SAMPLE_BUFFER_SIZE
+            );
+            if (sample_count == 0) continue;
+
+            // Count samples per bucket
+            size_t bucket_counts[NUM_BUCKETS] = {};
+            for (size_t s = 0; s < sample_count; ++s) {
+                uint64_t val = ex.samples[s];
+                for (size_t b = 0; b < NUM_BUCKETS; ++b) {
+                    if (val < bucket_bounds[b]) {
+                        bucket_counts[b]++;
+                        break;
+                    }
+                }
+            }
+
+            // Find max count for scaling
+            size_t max_count = 0;
+            for (size_t b = 0; b < NUM_BUCKETS; ++b) {
+                if (bucket_counts[b] > max_count) max_count = bucket_counts[b];
+            }
+            if (max_count == 0) continue;
+
+            std::cout << "\n  " << ex.name << " latency distribution (" << sample_count << " samples)\n";
+            std::cout << "  ┌─────────────────────────────────────────────────────────────┐\n";
+
+            for (size_t b = 0; b < NUM_BUCKETS; ++b) {
+                if (bucket_counts[b] == 0 && b > 0 && b < NUM_BUCKETS - 1) {
+                    // Skip empty middle buckets but show the label
+                    std::cout << "  │ " << bucket_labels[b] << " │"
+                              << std::string(BAR_WIDTH, ' ')
+                              << "│   0 │\n";
+                    continue;
+                }
+
+                int bar_len = (max_count > 0)
+                    ? static_cast<int>((static_cast<double>(bucket_counts[b]) / max_count) * BAR_WIDTH)
+                    : 0;
+                if (bucket_counts[b] > 0 && bar_len == 0) bar_len = 1;  // At least 1 char if nonzero
+
+                double pct = (sample_count > 0)
+                    ? (static_cast<double>(bucket_counts[b]) / sample_count) * 100.0
+                    : 0.0;
+
+                std::cout << "  │ " << bucket_labels[b] << " │"
+                          << std::string(bar_len, '#')
+                          << std::string(BAR_WIDTH - bar_len, ' ')
+                          << "│" << std::right << std::setw(4) << bucket_counts[b]
+                          << " │ " << std::fixed << std::setprecision(1)
+                          << std::setw(5) << pct << "%\n";
+            }
+
+            std::cout << "  └─────────────────────────────────────────────────────────────┘\n";
+        }
+    }
+
+    // Print queue occupancy statistics at push time
+    void print_occupancy() const {
+        std::cout << "\n  Queue Occupancy at Push Time (head-to-tail distance)\n";
+        std::cout << "  ┌────────────────────────────────────────────────────┐\n";
+        std::cout << "  │ Exchange   │    Mean    │    Min   │    Max       │\n";
+        std::cout << "  ├────────────────────────────────────────────────────┤\n";
+
+        for (size_t i = 0; i < exchange_count_; ++i) {
+            const auto& ex = exchanges_[i];
+            size_t sample_count = std::min(
+                ex.sample_index.load(std::memory_order_relaxed),
+                SAMPLE_BUFFER_SIZE
+            );
+            if (sample_count == 0) continue;
+
+            // Compute mean, min, max occupancy
+            size_t min_occ = SIZE_MAX;
+            size_t max_occ = 0;
+            double sum_occ = 0.0;
+
+            for (size_t s = 0; s < sample_count; ++s) {
+                size_t occ = ex.occupancy_samples[s];
+                sum_occ += occ;
+                if (occ < min_occ) min_occ = occ;
+                if (occ > max_occ) max_occ = occ;
+            }
+
+            double mean_occ = sum_occ / sample_count;
+
+            std::cout << "  │ " << std::left << std::setw(10) << ex.name << " │ "
+                      << std::right << std::fixed << std::setprecision(1)
+                      << std::setw(10) << mean_occ << " │ "
+                      << std::setw(8) << min_occ << " │ "
+                      << std::setw(8) << max_occ << "     │\n";
+        }
+
+        std::cout << "  └────────────────────────────────────────────────────┘\n";
     }
 
     // Get stats for a specific exchange

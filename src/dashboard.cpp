@@ -1,5 +1,6 @@
 #include "dashboard.hpp"
 #include "arbitrage_engine.hpp"
+#include "thread_affinity.hpp"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -69,6 +70,8 @@ void TerminalDashboard::set_update_interval(std::chrono::milliseconds interval) 
 }
 
 void TerminalDashboard::display_loop() {
+    thread_affinity::set_thread_affinity(thread_affinity::TAG_DASHBOARD);
+
     while (running_) {
         clear_screen();
         draw_header();
@@ -163,6 +166,7 @@ void TerminalDashboard::draw_market_data() {
         const char* exchange_color = BLUE;  // Default to blue (Coinbase)
         if (ticker.exchange == "Binance") exchange_color = YELLOW;
         else if (ticker.exchange == "Kraken") exchange_color = MAGENTA;
+        else if (ticker.exchange == "Bybit") exchange_color = GREEN;
 
         // Print row
         std::cout << CYAN << "║ " << RESET;
@@ -295,10 +299,12 @@ void TerminalDashboard::draw_arbitrage_opportunities() {
             const char* buy_color = BLUE;  // Default to blue (Coinbase)
             if (opp.buy_exchange == "Binance") buy_color = YELLOW;
             else if (opp.buy_exchange == "Kraken") buy_color = MAGENTA;
+            else if (opp.buy_exchange == "Bybit") buy_color = GREEN;
 
             const char* sell_color = BLUE;  // Default to blue (Coinbase)
             if (opp.sell_exchange == "Binance") sell_color = YELLOW;
             else if (opp.sell_exchange == "Kraken") sell_color = MAGENTA;
+            else if (opp.sell_exchange == "Bybit") sell_color = GREEN;
 
             std::cout << CYAN << "║ " << RESET;
             std::cout << BOLD << std::left << std::setw(9) << opp.symbol << RESET;

@@ -1,4 +1,5 @@
 #include "binance_client.hpp"
+#include "thread_affinity.hpp"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -139,6 +140,8 @@ void BinanceWebSocketClient::set_message_callback(MessageCallback callback) {
 }
 
 void BinanceWebSocketClient::run_client() {
+    thread_affinity::set_thread_affinity(thread_affinity::TAG_BINANCE_WS);
+
     try {
         while (!should_stop_ && connected_) {
             do_read();

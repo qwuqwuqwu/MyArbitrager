@@ -1,4 +1,5 @@
 #include "coinbase_client.hpp"
+#include "thread_affinity.hpp"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -144,6 +145,8 @@ void CoinbaseWebSocketClient::send_subscribe_message(const std::vector<std::stri
 }
 
 void CoinbaseWebSocketClient::run_client() {
+    thread_affinity::set_thread_affinity(thread_affinity::TAG_COINBASE_WS);
+
     try {
         while (!should_stop_ && connected_) {
             do_read();
